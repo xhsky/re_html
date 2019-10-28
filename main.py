@@ -54,7 +54,8 @@ def verify(result_dict):
             key_list=[]
 
             for i in re_word_rule:              # 关键字添加进列表
-                i=f"\\b{i}\\b"
+                #i=f"\\b{i}\\b"
+                i=f"\\b{i}\\b(.*?);"
                 r=re.search(i, text, re.I)
                 if r is not None: 
                     key_list.append(r.group())
@@ -77,6 +78,7 @@ def verify(result_dict):
                     for color in color_word:
                         if re.search(color, j, re.I):
                             key_list.append(color)
+                            break
             if len(key_list)!=0:
                 key_list=[str(i) for i in key_list[:]]
                 key_list=",".join(key_list)
@@ -121,7 +123,8 @@ def rule(filename, ignore_css_list):
                         text=res.text
                     else:
                         text="Not Found"
-                elif css_file.startswith(".") or css_file.startswith(".."): # 相对路径
+                #elif css_file.startswith(".") or css_file.startswith(".."): # 相对路径
+                else:
                     css_file=f"{html_dirname}/{css_file}"
                     if os.path.exists(css_file):
                         with open(css_file) as f:
