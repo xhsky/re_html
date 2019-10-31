@@ -10,6 +10,8 @@ import requests
 import json
 
 def get_dir(html_list, root_dir):
+    """循环获取目录列表
+    """
     for i in os.listdir(root_dir):
         i=f"{root_dir}/{i}"
         if os.path.isdir(i):
@@ -18,77 +20,58 @@ def get_dir(html_list, root_dir):
             html_list.append(i)
     return html_list
 
-def verify(result_dict):
-    """
-    result_dict={
-        css_file1: text, 
-        css_file2: text, 
-        style0: text, 
-        style1: text, 
-        ...
-    }
-
-    result={
-        html_file:{
-            css1: "key1, key2", 
-            css2: "key1, key2", 
-            style0: "key1, key2", 
-            style1: "key1, key2"
-        }, 
-        html_file:{
-            css1: null,                 # null css文件不存在, http的css则无法正常访问
-            css2: "key1, key2", 
-            style0: "key1, key2", 
-            style1: "key1, key2"
-        }, 
-    
-    }
-    """
-
-    result_dict_temp=result_dict.copy()
-    for key_name in result_dict_temp:
-        text=result_dict[key_name]
+def verify(text):
+    keys_dict={}
+    if text!="":                # 排除css文件为空的情况
         if text=="Not Found":
-            key_list=text
+            keys_dict=text
         else:
-            key_list=[]
+            # 按行匹配
+            text_list=text.split('\n')
+            for key_word in re_word_rule:              # 关键字匹配
+                if key_word not in keys_dict:
+                    keys_dict[key_word]=[]
+                for index, item in enumerate(text_list):
+                    re_key=rf'(\b{key_word}\b\s*:(?:.*?))(?:;|}}|")'
+                    key_result=re.findall(re_key, item, re.I)
 
-            for i in re_word_rule:              # 关键字添加进列表
-                #i=f"\\b{i}\\b"
-                i=f"\\b{i}\\b(.*?);"
-                r=re.search(i, text, re.I)
-                if r is not None: 
-                    key_list.append(r.group())
+                    for j in key_result:
+                        key_dict={}
+                        key, value=j.split(":")
+                        key_dict['line']=index+1
+                        key_dict['context']=value.strip()
+                        keys_dict[key_word].append(key_dict)
+                if len(keys_dict[key_word])==0:
+                    keys_dict.pop(key_word)
 
-            for i in re_color_rule:             # 判断颜色添加进入列表
-                key=f"\\b{i}\\b:(.*?);"         # background   ;
-                color_result=re.findall(key, text, re.I)
+            for key_word in re_color_rule:             # 颜色匹配
+                if key_word not in keys_dict:
+                    keys_dict[key_word]=[]
+                for index, item in enumerate(text_list):
+                    re_key=rf'(\b{key_word}\b\s*:(?:.*?))(?:;|}}|")'
+                    color_result=re.findall(re_key, item, re.I)
 
-                for j in color_result:
-                    rgb=re.search("rgb\((.*?)\)", j, re.I)      # 判断rgb颜色
-                    if rgb is not None:
-                        key_list.append(rgb.group())
-                        continue
-
-                    hex_color=re.search("#(\w{6})|#(\w{3})", j, re.I)
-                    if hex_color is not None:
-                        key_list.append(hex_color.group())
-                        continue
-
-                    for color in color_word:
-                        if re.search(color, j, re.I):
-                            key_list.append(color)
-                            break
-            if len(key_list)!=0:
-                key_list=[str(i) for i in key_list[:]]
-                key_list=",".join(key_list)
-
-        if len(key_list)==0:                    # 若未校验出问题, 则删除该条目
-            result_dict.pop(key_name)
-        else:
-            result_dict[key_name]=key_list
-
-    return result_dict
+                    for i in color_result:
+                        color=None
+                        rgb=re.search("rgb\((.*?)\)", i, re.I)      # 判断rgb颜色
+                        hex_color=re.search("#(\w{6})|#(\w{3})", i, re.I)
+                        if rgb is not None or hex_color is not None:
+                            color=i
+                        else:
+                            for j in color_word:
+                                if re.search(j, i, re.I):
+                                    color=i
+                                    break
+                        
+                        if color is not None:
+                            key_dict={}
+                            key, value=color.split(":")
+                            key_dict['line']=index+1
+                            key_dict['context']=value.strip()
+                            keys_dict[key_word].append(key_dict)
+                if len(keys_dict[key_word])==0:
+                    keys_dict.pop(key_word)
+    return keys_dict
 
 def rule(filename, ignore_css_list):
     with open(filename, "r") as f:
@@ -96,52 +79,57 @@ def rule(filename, ignore_css_list):
     soup=BeautifulSoup(text, "lxml")
     #soup=BeautifulSoup(text, "html.parser")
     link=soup.find_all("link")
-    style=soup.find_all("style")
+    #style=soup.find_all("style")
 
-    html_dirname=os.path.dirname(filename)
-    result={}                                       # 单文件dict
-    for i in link:                                  # 判断href中的css文件类型, 并合成css文件的路径
+    # 将单个html文件内的所有css文件组成list, 且将html文件也添加
+    html_filename_list=[filename, ]
+    for i in link:
         css_file=i.get("href")
         if css_file is not None:
-            css_basename=os.path.basename(css_file)
-            if css_file.endswith(".css") and css_basename not in ignore_css and "#" not in css_file:
-                css_file=css_file.strip()
-                if css_file.startswith("/"):            # 绝对路径开头
-                    #css_file=f"{webapps}/{css_file}"
-                    css_file=css_file[1:]
-                    if os.path.exists(css_file):
-                        with open(css_file) as f:
-                            text=f.read()
-                    else:
-                        text="Not Found"
-                elif css_file.startswith("http"):       # url
-                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) Chrome/50.0.2661.102'}
-                    url=css_file
-                    res=requests.get(url, headers=headers)
-                    code=res.status_code
-                    if code==200:
-                        text=res.text
-                    else:
-                        text="Not Found"
-                #elif css_file.startswith(".") or css_file.startswith(".."): # 相对路径
+            css_file=css_file.strip()
+            css_filename=os.path.basename(css_file)
+            # 从列表中排除忽略的css文件
+            if css_file.endswith(".css") and \
+                    css_filename not in ignore_css and \
+                    "#" not in css_file:
+                        html_filename_list.append(css_file)
+
+    result={}
+    # 读取文件内容, 定义text=f.read()
+    for i in html_filename_list:                                  
+        if i.endswith(".css"): 
+            if i.startswith("/"):               # 绝对路径开头
+                i=i[1:]                         # 去掉"/"
+                if os.path.exists(i):
+                    with open(i, "r") as f:
+                        text=f.read()
                 else:
-                    css_file=f"{html_dirname}/{css_file}"
-                    if os.path.exists(css_file):
-                        with open(css_file) as f:
-                            text=f.read()
-                    else:
-                        text="Not Found"
-                if text!="":
-                    css_file=os.path.normpath(css_file)
-                    result[css_file]=text
+                    text="Not Found"
+            elif i.startswith("http"):          # url
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) Chrome/50.0.2661.102'}
+                res=requests.get(i, headers=headers)
+                code=res.status_code
+                if code==200:
+                    text=res.text
+                else:
+                    text="Not Found"
+            #elif css_file.startswith(".") or css_file.startswith(".."): # 相对路径
+            else:
+                i=f"{os.path.dirname(filename)}/{i}"
+                if os.path.exists(i):
+                    with open(i, "r") as f:
+                        text=f.read()
+                else:
+                    text="Not Found"
+        else:                                   # html文件
+            with open(i, "r") as f:
+                text=f.read()
 
-    for index, item in enumerate(style):            # 将style里的css分别赋给style<n>
-        result[f"style{index}"]="".join(item)
-
-    if len(result)==0:                              # 判断是否有内容
-        return result
-    else:
-        return verify(result)
+        file_name=os.path.normpath(i)
+        temp=verify(text)
+        if len(temp)!=0:
+            result[file_name]=temp
+    return result
 
 def main():
     # 获取root_dir目录下所有html的文件路径
@@ -163,21 +151,36 @@ def main():
             if i in all_html_list:
                 all_html_list.remove(i)
 
+    # 格式化忽略的css(去掉前后空格)
     ignore_css_list=[]
     if ignore_css!="":
         for i in ignore_css.split(","):
             ignore_css_list.append(i.strip())
 
+    # 按文件组织dict, 并写入json文件
     result_all={}
     for i in all_html_list:
         single_result=rule(i, ignore_css_list)
         if len(single_result)!=0:
             result_all[i]=single_result
-
     with open(f"{output}", "w") as f:
         json.dump(result_all, f)
 
 if __name__ == "__main__":
+    """
+    result={
+        html_file:{
+            css1: {
+                key1: [ { line: N, context: None }, { line: N, context: None } ], 
+                key2: [ { line: N, context: None } ]
+            }, 
+            html: {
+                key1: [ { line: N, context: None }, { line: N, context: None } ], 
+                key2: [ { line: N, context: None } ]
+            } 
+        }, 
+    }
+    """
     my_dir=os.path.abspath(os.path.dirname(__file__))
     os.chdir(my_dir)
 
